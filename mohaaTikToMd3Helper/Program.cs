@@ -23,7 +23,7 @@ namespace mohaaTikToMd3Helper
             Dictionary<string, TikData> parsedTiks = new Dictionary<string, TikData>();
             Dictionary<string,string> md3Files = new Dictionary<string, string>();
             Dictionary<string,string> shaderFiles = new Dictionary<string, string>();
-            Dictionary<string,string> parsedShaders = new Dictionary<string, string>();
+            Dictionary<string,string> parsedShaders = new Dictionary<string, string>(StringComparer.InvariantCultureIgnoreCase);
             Dictionary<string,string> processedShaders = new Dictionary<string, string>();
             foreach (string file in files)
             {
@@ -105,7 +105,8 @@ namespace mohaaTikToMd3Helper
         {
             string shaderText = File.ReadAllText(file);
             //var otherMatches = PcreRegex.Matches(shaderText, @"(?<shaderName>[\w\d\/]+)?\s+(?<shaderBody>\{(?:[^\{\}]|(?R))*\})");
-            var otherMatches = PcreRegex.Matches(shaderText, @"(?<shaderName>[\w\d\/]+)?\s+(?:\/\/[^\n]+\s*)?(?<shaderBody>\{(?:[^\{\}]|(?R))*\})");
+            //var otherMatches = PcreRegex.Matches(shaderText, @"(?<shaderName>[\w\d\/]+)?\s+(?:\/\/[^\n]+\s*)?(?<shaderBody>\{(?:[^\{\}]|(?R))*\})");
+            var otherMatches = PcreRegex.Matches(shaderText, @"(?<shaderName>[-_\w\d\/]+)?\s+(?:\/\/[^\n]+\s*)?(?<shaderBody>\{(?:[^\{\}]|(?R))*\})");
             foreach(var match in otherMatches)
             {
                 shaderData[match.Groups["shaderName"].Value] = match.Groups["shaderBody"].Value;
@@ -216,6 +217,11 @@ namespace mohaaTikToMd3Helper
 
                                         string shaderToUseStr = surfaceToShaderMappings[surfaceNameString];
 
+                                        if(shaderToUseStr == null || !surfaceToShaderMappings.ContainsKey(surfaceNameString))
+                                        {
+                                            Console.WriteLine("Surface shader mapping not found wtf");
+                                        }
+
                                         if (shaderToUseStr.Contains('/')) // Not tested since it didn't occur.
                                         {
                                             // Fine.
@@ -279,7 +285,7 @@ namespace mohaaTikToMd3Helper
                                 long bytesLeft = offsetSurfaceEnd- br.BaseStream.Position;
                                 bw.Write(br.ReadBytes((int)bytesLeft));
 
-                                // Scale the model.
+                                // Scale the model. (this was wrong actually, no need apparently)
                                 long oldReaderPos = br.BaseStream.Position;
                                 long oldWriterPos = bw.BaseStream.Position;
 
@@ -324,7 +330,7 @@ namespace mohaaTikToMd3Helper
         {
             public float scale;
             public string skelModel;
-            public Dictionary<string, string> surfaceToShaderMappings = new Dictionary<string, string>();
+            public Dictionary<string, string> surfaceToShaderMappings = new Dictionary<string, string>(StringComparer.InvariantCultureIgnoreCase);
         }
 
         static Regex skelModelRegex = new Regex(@"\n\s*skelModel\s+(?<skelModel>[^\n\r]+)",RegexOptions.IgnoreCase|RegexOptions.IgnoreCase|RegexOptions.Compiled);
