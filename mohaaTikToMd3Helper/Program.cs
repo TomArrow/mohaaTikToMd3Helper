@@ -62,7 +62,7 @@ namespace mohaaTikToMd3Helper
                     string relativePath = Path.GetRelativePath(startDirectory, kvp.Key);
                     string targetPath = Path.Combine(targetDirectory, relativePath);
                     Directory.CreateDirectory(Path.GetDirectoryName(targetPath));
-                    byte[] moddedMD3 = ModMD3(md3Files[skelModelBaseName],kvp.Value.surfaceToShaderMappings,ref parsedShaders,ref processedShaders);
+                    byte[] moddedMD3 = ModMD3(md3Files[skelModelBaseName],kvp.Value.scale,kvp.Value.surfaceToShaderMappings,ref parsedShaders,ref processedShaders);
                     targetPath = Path.ChangeExtension(targetPath,".md3");
                     File.WriteAllBytes(targetPath,moddedMD3);
                 }
@@ -80,6 +80,20 @@ namespace mohaaTikToMd3Helper
             }
 
             File.WriteAllText("mohaaConvertShaders.shader",sb.ToString());
+
+            sb.Clear();
+
+            foreach (var kvp in parsedTiks)
+            {
+                string skelModelName = kvp.Value.skelModel;
+                string skelModelBaseName = Path.GetFileNameWithoutExtension(skelModelName);
+                if (md3Files.ContainsKey(skelModelBaseName))
+                {
+                    sb.Append($"{kvp.Key}:{kvp.Value.scale}\n");
+                }
+            }
+
+            File.WriteAllText("tikScales.txt", sb.ToString());
 
 
         }
@@ -104,7 +118,7 @@ namespace mohaaTikToMd3Helper
             }*/
         }
 
-        private static byte[] ModMD3(string md3File, Dictionary<string, string> surfaceToShaderMappings, ref Dictionary<string, string> parsedShaders, ref Dictionary<string, string> processedShaders)
+        private static byte[] ModMD3(string md3File, float scale, Dictionary<string, string> surfaceToShaderMappings, ref Dictionary<string, string> parsedShaders, ref Dictionary<string, string> processedShaders)
         {
             byte[] data = File.ReadAllBytes(md3File);
             byte[] retVal = null;
@@ -150,6 +164,7 @@ namespace mohaaTikToMd3Helper
                             for(int i=0;i< numSurfaces; i++)
                             {
                                 long offsetSurfaceStart = br.BaseStream.Position;
+                                long offsetSurfaceStartOut = bw.BaseStream.Position;
                                 bw.Write(br.ReadBytes(4)); //IDENT (IDP3)
                                 byte[] surfaceName = br.ReadBytes(64);
                                 string surfaceNameString = Encoding.ASCII.GetString(surfaceName).TrimEnd('\0');
@@ -159,7 +174,8 @@ namespace mohaaTikToMd3Helper
                                 bw.Write(br.ReadBytes(4)); //numFrames
                                 int numShaders = br.ReadInt32();//NumSurfaces
                                 bw.Write(Math.Max(surfaceIsMapped ? 1 : 0, numShaders));
-                                bw.Write(br.ReadBytes(4)); //numVerts
+                                int numVerts = br.ReadInt32();
+                                bw.Write(numVerts);
                                 bw.Write(br.ReadBytes(4)); //numTriangles
 
                                 int offsetTriangles = br.ReadInt32();
@@ -168,6 +184,8 @@ namespace mohaaTikToMd3Helper
                                 int offsetXYZNormal = br.ReadInt32();
                                 int offsetEnd = br.ReadInt32();
                                 long offsetSurfaceEnd = offsetSurfaceStart + offsetEnd;
+                                long offsetSurfaceXYZNormals = offsetSurfaceStart + offsetXYZNormal;
+                                long offsetSurfaceXYZNormalsOut = offsetSurfaceStartOut + offsetXYZNormal;
 
                                 if (surfaceIsMapped)
                                 {
@@ -194,6 +212,7 @@ namespace mohaaTikToMd3Helper
                                         bw.Write(offsetST + 64 + 4);
                                         bw.Write(offsetXYZNormal + 64 + 4);
                                         bw.Write(offsetEnd + 64 + 4);
+                                        offsetSurfaceXYZNormalsOut += 64 + 4;
 
                                         string shaderToUseStr = surfaceToShaderMappings[surfaceNameString];
 
@@ -260,6 +279,23 @@ namespace mohaaTikToMd3Helper
                                 long bytesLeft = offsetSurfaceEnd- br.BaseStream.Position;
                                 bw.Write(br.ReadBytes((int)bytesLeft));
 
+                                // Scale the model.
+                                long oldReaderPos = br.BaseStream.Position;
+                                long oldWriterPos = bw.BaseStream.Position;
+
+                                br.BaseStream.Seek(offsetSurfaceXYZNormals, SeekOrigin.Begin);
+                                bw.BaseStream.Seek(offsetSurfaceXYZNormalsOut, SeekOrigin.Begin);
+
+                                for(int v = 0;v< numVerts; v++)
+                                {
+                                    bw.Write( (Int16)((float)br.ReadInt16() * scale));
+                                    bw.Write( (Int16)((float)br.ReadInt16() * scale));
+                                    bw.Write( (Int16)((float)br.ReadInt16() * scale));
+                                    bw.Write( br.ReadInt16()); // Encoded normal vector, no scaling.
+                                }
+
+                                br.BaseStream.Seek(oldReaderPos,SeekOrigin.Begin);
+                                bw.BaseStream.Seek(oldWriterPos, SeekOrigin.Begin);
                             }
 
 
@@ -286,11 +322,13 @@ namespace mohaaTikToMd3Helper
 
         class TikData
         {
+            public float scale;
             public string skelModel;
             public Dictionary<string, string> surfaceToShaderMappings = new Dictionary<string, string>();
         }
 
         static Regex skelModelRegex = new Regex(@"\n\s*skelModel\s+(?<skelModel>[^\n\r]+)",RegexOptions.IgnoreCase|RegexOptions.IgnoreCase|RegexOptions.Compiled);
+        static Regex scaleRegex = new Regex(@"\n\s*scale\s+(?<scale>[\d\.]+)",RegexOptions.IgnoreCase|RegexOptions.IgnoreCase|RegexOptions.Compiled);
         static Regex surfaceShaderRegex = new Regex(@"\n\s*surface\s+(?<surface>[^\s]+)\s+shader\s+(?<shader>[^\r\n]+)", RegexOptions.IgnoreCase|RegexOptions.IgnoreCase|RegexOptions.Compiled);
 
         static private TikData ParseTik(string path)
@@ -302,12 +340,14 @@ namespace mohaaTikToMd3Helper
             if ((match = skelModelRegex.Match(tikContent)).Success){
                 retVal.skelModel = match.Groups["skelModel"].Value.Trim();
             }
+            if ((match = scaleRegex.Match(tikContent)).Success){
+                retVal.scale = float.Parse(match.Groups["scale"].Value.Trim());
+            }
             if ((matches = surfaceShaderRegex.Matches(tikContent)).Count > 0){
                 foreach(Match matchHere in matches)
                 {
                     retVal.surfaceToShaderMappings[matchHere.Groups["surface"].Value.Trim()] = matchHere.Groups["shader"].Value.Trim();
                 }
-                retVal.skelModel = match.Groups["skelModel"].Value;
             }
 
             return retVal;
