@@ -58,10 +58,12 @@ namespace mohaaTikToMd3Helper
                 if (md3Files.ContainsKey(skelModelBaseName))
                 {
                     Console.WriteLine(md3Files[skelModelBaseName]);
-                    string relativePath = Path.GetRelativePath(startDirectory, md3Files[skelModelBaseName]);
+                    //string relativePath = Path.GetRelativePath(startDirectory, md3Files[skelModelBaseName]);
+                    string relativePath = Path.GetRelativePath(startDirectory, kvp.Key);
                     string targetPath = Path.Combine(targetDirectory, relativePath);
                     Directory.CreateDirectory(Path.GetDirectoryName(targetPath));
                     byte[] moddedMD3 = ModMD3(md3Files[skelModelBaseName],kvp.Value.surfaceToShaderMappings,ref parsedShaders,ref processedShaders);
+                    targetPath = Path.ChangeExtension(targetPath,".md3");
                     File.WriteAllBytes(targetPath,moddedMD3);
                 }
             }
