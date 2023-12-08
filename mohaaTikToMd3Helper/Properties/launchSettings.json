@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "mohaaTikToMd3Helper": {
+      "commandName": "Project",
+      "commandLineArgs": "\"models\" \"models_fix\""
+    }
+  }
+}
