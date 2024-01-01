@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Numerics;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -13,18 +14,29 @@ namespace mohaaTikToMd3Helper
         {
             string startDirectory = args[0];
             string targetDirectory = args[1];
+            string mapFile = args.Length > 2 && args[2].EndsWith(".map", StringComparison.InvariantCultureIgnoreCase) ? args[2] : null;
+            bool noScaling = args.Length > 2 && args[2] == "noscale" || args.Length > 3 && args[3] == "noscale"; // stupid haha but lazy
+
+            if (null != mapFile)
+            {
+                List<TikInstance> tikInstances = GetMapTikInstances(mapFile);
+                string mergeMapText = TransformTikInstanceClips(startDirectory,tikInstances);
+                File.WriteAllText("mohaaClipMap.map",mergeMapText);
+            }
+
+
             string shaderDirectory = Path.Combine(startDirectory,"..","shaders");
             string shaderDirectory2 = Path.Combine(startDirectory,"..","scripts");
             List<string> shadFiles = new List<string>();
             shadFiles.AddRange(crawlDirectory(shaderDirectory));
             shadFiles.AddRange(crawlDirectory(shaderDirectory2));
             string[] files = crawlDirectory(startDirectory);
-            Dictionary<string, string> tikFiles = new Dictionary<string, string>();
-            Dictionary<string, TikData> parsedTiks = new Dictionary<string, TikData>();
-            Dictionary<string,string> md3Files = new Dictionary<string, string>();
-            Dictionary<string,string> shaderFiles = new Dictionary<string, string>();
+            Dictionary<string, string> tikFiles = new Dictionary<string, string>(StringComparer.InvariantCultureIgnoreCase);
+            Dictionary<string, TikData> parsedTiks = new Dictionary<string, TikData>(StringComparer.InvariantCultureIgnoreCase);
+            Dictionary<string,string> md3Files = new Dictionary<string, string>(StringComparer.InvariantCultureIgnoreCase);
+            Dictionary<string,string> shaderFiles = new Dictionary<string, string>(StringComparer.InvariantCultureIgnoreCase);
             Dictionary<string,string> parsedShaders = new Dictionary<string, string>(StringComparer.InvariantCultureIgnoreCase);
-            Dictionary<string,string> processedShaders = new Dictionary<string, string>();
+            Dictionary<string,string> processedShaders = new Dictionary<string, string>(StringComparer.InvariantCultureIgnoreCase);
             foreach (string file in files)
             {
                 string basename = Path.GetFileNameWithoutExtension(file);
@@ -62,7 +74,7 @@ namespace mohaaTikToMd3Helper
                     string relativePath = Path.GetRelativePath(startDirectory, kvp.Key);
                     string targetPath = Path.Combine(targetDirectory, relativePath);
                     Directory.CreateDirectory(Path.GetDirectoryName(targetPath));
-                    byte[] moddedMD3 = ModMD3(md3Files[skelModelBaseName],kvp.Value.scale,kvp.Value.surfaceToShaderMappings,ref parsedShaders,ref processedShaders);
+                    byte[] moddedMD3 = ModMD3(md3Files[skelModelBaseName], noScaling ? 1.0f :kvp.Value.scale,kvp.Value.surfaceToShaderMappings,ref parsedShaders,ref processedShaders);
                     targetPath = Path.ChangeExtension(targetPath,".md3");
                     File.WriteAllBytes(targetPath,moddedMD3);
                 }
@@ -97,6 +109,113 @@ namespace mohaaTikToMd3Helper
 
 
         }
+
+        static string brushEntitiesMatchRegex = @"\{(?<properties>[^\{\}]+)(?<brushes>(?:\{(?:[^\{\}]+|(?R))*\}(?:[^\{\}]+))*)\s*\}"; 
+        static Regex faceParseRegex = new Regex(@"(?<coordinates>(?<coordvec>\((?<vectorPart>\s*[-\d\.]+){3}\s*\)\s*){3})(?<rest>(?:\(\s*(\((?:\s*[-\d\.]+){3}\s*\)\s*){2}\))?\s*(?<texname>[^\s\n]+)\s*(?:\s*[-\d\.]+){3}[^\n]+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        static Regex coordReplaceRegex = new Regex(@"(?<=\()(?<coordvec>(?<vectorPart>\s*[-\d\.]+){3})", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        static string TransformTikInstanceClips(string basePath, List<TikInstance> tiks)
+        {
+            Vector3 upVector = new Vector3(0,0,1);
+            HashSet<string> unfoundFiles = new HashSet<string>();
+            StringBuilder sb = new StringBuilder();
+            sb.Append($"{{\n\t\"classname\" \"func_group\"\n\n");
+            foreach (var tik in tiks)
+            {
+                string tikPath = Path.Combine(basePath, tik.tikPath);
+                if (!File.Exists(tikPath))
+                {
+                    //Console.WriteLine($"{tikPath} not found.");
+                    unfoundFiles.Add(tikPath);
+                    continue;
+                }
+                string clipPath = Path.ChangeExtension(tikPath,".map");
+                if (!File.Exists(clipPath))
+                {
+                    //Console.WriteLine($"{clipPath} not found.");
+                    unfoundFiles.Add(clipPath);
+                    continue;
+                }
+
+                string clipText = File.ReadAllText(clipPath);
+                var entityMatches = PcreRegex.Matches(clipText, brushEntitiesMatchRegex);
+                foreach (var entityMatch in entityMatches)
+                {
+                    string propertiesText = entityMatch.Groups["properties"].Value;
+                    string brushesText = entityMatch.Groups["brushes"].Value;
+                    brushesText = faceParseRegex.Replace(brushesText,(match)=> {
+                        string coordinates = match.Groups["coordinates"].Value;
+                        string rest = match.Groups["rest"].Value;
+
+                        coordinates = coordReplaceRegex.Replace(coordinates,(coordMatch)=> {
+
+                            string[] pointPositionParts = coordMatch.Groups["coordvec"].Value.Split(" ", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                            Vector3 pointPosition = new Vector3(float.Parse(pointPositionParts[0]), float.Parse(pointPositionParts[1]), float.Parse(pointPositionParts[2]));
+
+                            // First we rotate.
+                            if(tik.angle != 0)
+                            {
+                                pointPosition = upVector.RotatePointAroundMe(pointPosition, tik.angle);
+                            }
+                            if(tik.scale != 1.0f)
+                            {
+                                pointPosition *= tik.scale;
+                            }
+                            pointPosition += tik.position;
+
+                            return $" {pointPosition.X} {pointPosition.Y} {pointPosition.Z} ";
+                        });
+                        return $"{coordinates} {rest}";
+                    });
+
+                    sb.Append($"\n{brushesText}\n");
+                }
+
+            }
+            foreach (string unfoundFile in unfoundFiles)
+            {
+                Console.WriteLine($"{unfoundFile} not found.");
+            }
+            sb.Append("\n}");
+            return sb.ToString();
+        }
+
+        class TikInstance
+        {
+            public string tikPath = "";
+            public Vector3 position;
+            public float angle;
+            public float scale;
+        }
+
+        //static Regex faceParseRegex = new Regex(@"(?<coordinates>(?<coordvec>\((?<vectorPart>\s*[-\d\.]+){3}\s*\)\s*){3})(?:\(\s*(\((?:\s*[-\d\.]+){3}\s*\)\s*){2}\))?\s*(?<texname>[^\s\n]+)\s*(?:\s*[-\d\.]+){3}", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        static Regex entitiesParseRegex = new Regex(@"\{(\s*""([^""]+)""[ \t]+""([^""]+)"")+\s*\}", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        static List<TikInstance> GetMapTikInstances(string mapFile)
+        {
+            List<TikInstance> tiks = new List<TikInstance>();
+            string mapText = File.ReadAllText(mapFile);
+            MatchCollection matches = entitiesParseRegex.Matches(mapText);
+            foreach(Match match in matches)
+            {
+                EntityProperties props = EntityProperties.FromString(match.Value);
+                if (props.ContainsKey("model") && props["model"].EndsWith(".tik",StringComparison.InvariantCultureIgnoreCase))
+                {
+                    string[] originParts = props["origin"].Split(" ",StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries);
+
+                    tiks.Add(new TikInstance() {
+                        tikPath = props["model"].Replace("//","/").Replace("//","/"),
+                        position = new Vector3(float.Parse(originParts[0]), float.Parse(originParts[1]), float.Parse(originParts[2])),
+                        angle = props.ContainsKey("angle") ? float.Parse(props["angle"]) : 0,
+                        scale = props.ContainsKey("scale") ? float.Parse(props["scale"]) : 0,
+                    });
+                }
+            }
+            return tiks;
+        }
+
+
+
 
         // C# regex doesnt support ?R
         //static Regex shaderRegex = new Regex(@"(?<shaderName>[\w\d\/]+)?\s+(?<shaderBody>\{(?:[^\{\}]|(?R))*\})", RegexOptions.IgnoreCase | RegexOptions.IgnoreCase | RegexOptions.Compiled);     
@@ -285,23 +404,25 @@ namespace mohaaTikToMd3Helper
                                 long bytesLeft = offsetSurfaceEnd- br.BaseStream.Position;
                                 bw.Write(br.ReadBytes((int)bytesLeft));
 
-                                // Scale the model. (this was wrong actually, no need apparently)
-                                long oldReaderPos = br.BaseStream.Position;
-                                long oldWriterPos = bw.BaseStream.Position;
+                                // Scale the model. 
+                                if(scale != 1.0f) { 
+                                    long oldReaderPos = br.BaseStream.Position;
+                                    long oldWriterPos = bw.BaseStream.Position;
 
-                                br.BaseStream.Seek(offsetSurfaceXYZNormals, SeekOrigin.Begin);
-                                bw.BaseStream.Seek(offsetSurfaceXYZNormalsOut, SeekOrigin.Begin);
+                                    br.BaseStream.Seek(offsetSurfaceXYZNormals, SeekOrigin.Begin);
+                                    bw.BaseStream.Seek(offsetSurfaceXYZNormalsOut, SeekOrigin.Begin);
 
-                                for(int v = 0;v< numVerts; v++)
-                                {
-                                    bw.Write( (Int16)((float)br.ReadInt16() * scale));
-                                    bw.Write( (Int16)((float)br.ReadInt16() * scale));
-                                    bw.Write( (Int16)((float)br.ReadInt16() * scale));
-                                    bw.Write( br.ReadInt16()); // Encoded normal vector, no scaling.
+                                    for(int v = 0;v< numVerts; v++)
+                                    {
+                                        bw.Write( (Int16)((float)br.ReadInt16() * scale));
+                                        bw.Write( (Int16)((float)br.ReadInt16() * scale));
+                                        bw.Write( (Int16)((float)br.ReadInt16() * scale));
+                                        bw.Write( br.ReadInt16()); // Encoded normal vector, no scaling.
+                                    }
+
+                                    br.BaseStream.Seek(oldReaderPos,SeekOrigin.Begin);
+                                    bw.BaseStream.Seek(oldWriterPos, SeekOrigin.Begin);
                                 }
-
-                                br.BaseStream.Seek(oldReaderPos,SeekOrigin.Begin);
-                                bw.BaseStream.Seek(oldWriterPos, SeekOrigin.Begin);
                             }
 
 

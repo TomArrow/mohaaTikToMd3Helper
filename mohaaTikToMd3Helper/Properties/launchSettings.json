@@ -2,7 +2,7 @@
   "profiles": {
     "mohaaTikToMd3Helper": {
       "commandName": "Project",
-      "commandLineArgs": "\"models\" \"models_fix\""
+      "commandLineArgs": "\"models\" \"models_fix\" \"mohdm1.map\""
     }
   }
 }
