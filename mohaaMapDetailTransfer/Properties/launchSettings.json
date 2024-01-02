@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "mohaaMapDetailTransfer": {
+      "commandName": "Project",
+      "commandLineArgs": "\"mohdm1.map\" \"mohdm1_clean7.map\" 6"
+    }
+  }
+}
